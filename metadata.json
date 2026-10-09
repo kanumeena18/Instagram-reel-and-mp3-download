@@ -1,0 +1,6 @@
+{
+  "name": "MediaFetch - Telegram Downloader Bot",
+  "description": "High-speed Telegram bot delivering top-quality media from Instagram with live progress tracking, stream verification, and direct media delivery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
