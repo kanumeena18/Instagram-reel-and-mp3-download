@@ -145,13 +145,23 @@ Just paste your Instagram link to get started.`
     const tStart = performance.now();
     let statusMsg: any = null;
     try {
-      statusMsg = await ctx.reply("⚡ Link received. Preparing your download...");
+      statusMsg = await ctx.reply("⚡ Processing link...");
     } catch {
       // Ignore initial message error
     }
 
+    const updateStatus = async (text: string) => {
+      if (statusMsg) {
+        try {
+          await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, text);
+        } catch {
+          // ignore rate limit or duplicate edit error
+        }
+      }
+    };
+
     try {
-      // 1. FAST PATH: Check Smart Cache for instant reuse (< 1.5s total delivery)
+      // 1. FAST PATH: Check Smart Cache for instant reuse
       const cached = getCachedMedia(url);
       if (cached) {
         console.log(`⚡ [Cache Hit] Reusing valid cached media for: ${url}`);
@@ -160,46 +170,44 @@ Just paste your Instagram link to get started.`
         const creatorStr = cached.uploader || 'Instagram Creator';
         const mediaCaption = `🎬 Video by ${creatorStr}\n📺 ${cached.resolution} · ${cached.videoSizeMB.toFixed(1)} MB`;
 
+        await updateStatus("🎬 Sending MP4...");
+
         const tVidStart = performance.now();
         await ctx.replyWithVideo(new InputFile(cached.videoFilePath), {
           caption: mediaCaption,
           supports_streaming: true,
         });
-        const tFirstFileSent = performance.now();
-        const videoUploadMs = tFirstFileSent - tVidStart;
 
-        let audioUploadMs = 0;
+        let mp3Sent = false;
         if (cached.mp3FilePath && fs.existsSync(cached.mp3FilePath)) {
-          const tAudStart = performance.now();
+          await updateStatus("📤 Sending MP3...");
           try {
-            await ctx.replyWithAudio(new InputFile(cached.mp3FilePath, cached.mp3FileName), {
+            await ctx.replyWithAudio(new InputFile(cached.mp3FilePath!, cached.mp3FileName!), {
               caption: `🎵 Audio — MP3\n320 kbps`,
               title: cached.title || 'Instagram Audio',
               performer: creatorStr,
             });
-            audioUploadMs = performance.now() - tAudStart;
+            mp3Sent = true;
           } catch (audioErr: any) {
             addBotLog('error', `Failed to send cached MP3: ${audioErr.message}`);
           }
         }
 
+        await updateStatus("✅ Media delivered!");
         if (statusMsg) {
           ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
         }
 
         botState.successfulDownloads++;
         botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
-
-        const tTotal = performance.now() - tStart;
-        const firstFileMs = tFirstFileSent - tStart;
-        console.log(`⚡ [TIMING - CACHE HIT] Link: ${url.substring(0, 40)} | VideoUpload: ${Math.round(videoUploadMs)}ms | AudioUpload: ${Math.round(audioUploadMs)}ms | FirstFile: ${Math.round(firstFileMs)}ms | Total: ${Math.round(tTotal)}ms`);
-        addBotLog('timing', `⚡ Cache hit: First file in ${(firstFileMs / 1000).toFixed(1)}s, total ${(tTotal / 1000).toFixed(1)}s`);
+        addBotLog('timing', `⚡ Cache hit delivery complete`);
         return;
       }
 
-      // 2. FRESH DOWNLOAD: SingleFlight deduplication ensures identical simultaneous URLs are only fetched once
+      // 2. FRESH DOWNLOAD: SingleFlight deduplication
       const normUrl = normalizeInstagramUrl(url);
 
+      await updateStatus("⬇️ Downloading media...");
       const downloadResult = await downloadMedia(url);
       const tDownloadDone = performance.now();
       const downloadMs = tDownloadDone - tStart;
@@ -208,16 +216,11 @@ Just paste your Instagram link to get started.`
       const creatorStr = downloadResult.uploader || 'Instagram Creator';
       const mediaCaption = `🎬 Video by ${creatorStr}\n📺 ${resolutionStr} · ${downloadResult.fileSizeMB.toFixed(1)} MB`;
 
-      // 3. ULTRA-FAST CONCURRENCY:
-      // Start Video upload immediately the millisecond the video is on disk.
-      // Simultaneously, run FFmpeg multi-core MP3 extraction in the background.
-      let tFirstFileSent = 0;
-      let videoUploadMs = 0;
-      let mp3Ms = 0;
+      // 3. ULTIMATE SPEED: Concurrent MP4 Upload + MP3 Extraction
+      await updateStatus("🎬 Sending MP4...");
 
-      // Pipeline A: Video Upload to Telegram
+      // Start MP4 upload
       const videoUploadPromise = (async () => {
-        const tVidStart = performance.now();
         try {
           await ctx.replyWithVideo(new InputFile(downloadResult.filePath), {
             caption: mediaCaption,
@@ -233,7 +236,6 @@ Just paste your Instagram link to get started.`
             (!botState.isUsingLocalBotApi && downloadResult.fileSizeMB > 50 && (rawErr.includes('Bad Request') || rawErr.includes('400')));
 
           if (!isSizeLimitation) {
-            // Fallback to document
             await ctx.replyWithDocument(new InputFile(downloadResult.filePath, downloadResult.fileName), {
               caption: mediaCaption,
             });
@@ -241,20 +243,16 @@ Just paste your Instagram link to get started.`
             throw videoUploadErr;
           }
         }
-        tFirstFileSent = performance.now();
-        videoUploadMs = tFirstFileSent - tVidStart;
       })();
 
-      // Pipeline B: Concurrent High-Speed 320 kbps MP3 Extraction
+      // Start MP3 extraction concurrently in background right when video is available
       const mp3ExtractionPromise = (async () => {
-        const tMp3Start = performance.now();
         try {
           const res = await extractAudioFromVideo(
             downloadResult.filePath,
             downloadResult.id,
             creatorStr
           );
-          mp3Ms = performance.now() - tMp3Start;
           return res;
         } catch (audioErr: any) {
           addBotLog('error', `MP3 extraction failed: ${audioErr.message}`);
@@ -262,52 +260,48 @@ Just paste your Instagram link to get started.`
         }
       })();
 
-      // Wait for Video Upload to complete
+      // Await MP4 upload first (absolute priority)
       await videoUploadPromise;
 
-      // Wait for MP3 Extraction to complete (already finished or just finishing)
+      // Now check if MP3 extraction is ready, or await it
+      await updateStatus("🎵 Preparing MP3...");
       const mp3Result = await mp3ExtractionPromise;
 
-      // 4. Send MP3 immediately
-      let audioUploadMs = 0;
-      if (mp3Result) {
-        const tAudStart = performance.now();
+      if (mp3Result && fs.existsSync(mp3Result.filePath)) {
+        await updateStatus("📤 Sending MP3...");
         try {
           await ctx.replyWithAudio(new InputFile(mp3Result.filePath, mp3Result.fileName), {
             caption: `🎵 Audio — MP3\n320 kbps`,
             title: downloadResult.title || 'Instagram Audio',
             performer: creatorStr,
           });
-          audioUploadMs = performance.now() - tAudStart;
         } catch (audioSendErr: any) {
           addBotLog('error', `Failed to send MP3 audio: ${audioSendErr.message}`);
-          await ctx.reply("⚠️ Video downloaded, but MP3 could not be sent.");
         }
+
+        // Store in cache
+        await storeMediaInCache(url, downloadResult, mp3Result);
+
+        // Cleanup temporary MP3
+        await mp3Result.cleanup().catch(() => {});
+      } else {
+        await storeMediaInCache(url, downloadResult, undefined);
       }
 
-      // Store in smart cache for immediate reuse by duplicate requests
-      await storeMediaInCache(url, downloadResult, mp3Result || undefined);
+      // Cleanup downloaded video
+      await downloadResult.cleanup().catch(() => {});
 
-      // Clean up temporary status message
+      await updateStatus("✅ Media delivered!");
       if (statusMsg) {
         ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-      }
-
-      // Clean up temporary working files (the cache preserves persistent copies)
-      await downloadResult.cleanup().catch(() => {});
-      if (mp3Result) {
-        await mp3Result.cleanup().catch(() => {});
       }
 
       botState.successfulDownloads++;
       botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
 
       const tTotal = performance.now() - tStart;
-      const firstFileMs = tFirstFileSent ? (tFirstFileSent - tStart) : downloadMs;
+      addBotLog('success', `Delivered MP4 + MP3 to @${ctx.from?.username || ctx.from?.id} in ${(tTotal / 1000).toFixed(1)}s`);
 
-      console.log(`⚡ [TIMING] Link: ${url.substring(0, 40)} | Download: ${Math.round(downloadMs)}ms | MP3: ${Math.round(mp3Ms)}ms | VideoUpload: ${Math.round(videoUploadMs)}ms | AudioUpload: ${Math.round(audioUploadMs)}ms | FirstFile: ${Math.round(firstFileMs)}ms | Total: ${Math.round(tTotal)}ms`);
-      addBotLog('timing', `⚡ Ultra-Fast: First file in ${(firstFileMs / 1000).toFixed(1)}s, total ${(tTotal / 1000).toFixed(1)}s`);
-      addBotLog('success', `Sent media (${downloadResult.fileSizeMB.toFixed(1)}MB) + MP3 to @${ctx.from?.username || ctx.from?.id}`);
     } catch (err: any) {
       botState.failedDownloads++;
       botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);

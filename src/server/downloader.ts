@@ -658,24 +658,19 @@ export async function downloadMedia(
     '--no-mtime',
     '--no-cache-dir',
     '-f',
-    'best/bestvideo+bestaudio',
-    '--format-sort',
-    'res,fps,size,br',
-    '--merge-output-format',
-    'mp4',
+    'best/b',
     '--no-warnings',
     '--no-check-certificates',
     '--socket-timeout',
-    '10',
+    '8',
     '--retries',
-    '2',
+    '1',
     '--fragment-retries',
-    '2',
+    '1',
     '--extractor-retries',
-    '2',
+    '1',
     '-o',
     outputTemplate,
-    '--write-info-json',
     rawUrl,
   ];
 
@@ -806,24 +801,13 @@ export async function downloadMedia(
     const fileSizeBytes = stat.size;
     const fileSizeMB = fileSizeBytes / (1024 * 1024);
 
-    let parsedMetadata: any = {};
-    const infoJsonPath = path.join(tempDir, `${id}.info.json`);
-    if (fs.existsSync(infoJsonPath)) {
-      try {
-        const rawJson = await fs.promises.readFile(infoJsonPath, 'utf-8');
-        parsedMetadata = JSON.parse(rawJson);
-      } catch {
-        // ignore info json parse errors
-      }
-    }
-
     // Verify final file
-    const verification = await verifyQuality(filePath, parsedMetadata);
+    const verification = await verifyQuality(filePath, {});
 
-    const title = parsedMetadata.title || 'Instagram Media';
-    const uploader = parsedMetadata.uploader || parsedMetadata.channel || parsedMetadata.uploader_id;
-    const duration = typeof parsedMetadata.duration === 'number' ? parsedMetadata.duration : verification.duration;
-    const thumbnail = parsedMetadata.thumbnail;
+    const title = 'Instagram Media';
+    const uploader = 'Instagram Creator';
+    const duration = verification.duration;
+    const thumbnail = undefined;
 
     const cleanup = async () => {
       await cleanupFiles(tempDir, id);
