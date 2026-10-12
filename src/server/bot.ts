@@ -204,10 +204,12 @@ Just paste your Instagram link to get started.`
         return;
       }
 
+      await updateStatus("🔍 Finding highest available quality...");
+
       // 2. FRESH DOWNLOAD: SingleFlight deduplication
       const normUrl = normalizeInstagramUrl(url);
 
-      await updateStatus("⬇️ Downloading media...");
+      await updateStatus("⬇️ Downloading original-quality video...");
       const downloadResult = await downloadMedia(url);
       const tDownloadDone = performance.now();
       const downloadMs = tDownloadDone - tStart;
@@ -264,7 +266,7 @@ Just paste your Instagram link to get started.`
       await videoUploadPromise;
 
       // Now check if MP3 extraction is ready, or await it
-      await updateStatus("🎵 Preparing MP3...");
+      await updateStatus("🎵 Preparing high-quality MP3...");
       const mp3Result = await mp3ExtractionPromise;
 
       if (mp3Result && fs.existsSync(mp3Result.filePath)) {
