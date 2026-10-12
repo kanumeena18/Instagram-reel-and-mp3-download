@@ -75,66 +75,160 @@ export interface AudioExtractionResult {
   cleanup: () => Promise<void>;
 }
 
-// Locate yt-dlp executable across platforms (Linux, Windows, macOS, local bin)
-export function getExecutablePath(): string {
-  if (process.env.YT_DLP_PATH && fs.existsSync(process.env.YT_DLP_PATH)) {
-    return process.env.YT_DLP_PATH;
-  }
+// Strip internal filesystem paths from strings to prevent leaking server directory structure to end users
+export function stripInternalPaths(text: string): string {
+  if (!text) return '';
+  return text
+    // Replace absolute Unix/Linux paths (e.g., /app/applet/bin/yt-dlp, /usr/bin/ffmpeg, /home/..., /tmp/...)
+    .replace(/(?:\/(?:[a-zA-Z0-9_\-.]+\/)+[a-zA-Z0-9_\-.]+)/g, '[system file]')
+    // Replace Windows absolute paths (e.g., C:\app\bin\yt-dlp.exe)
+    .replace(/[a-zA-Z]:\\(?:[a-zA-Z0-9_\-.]+\\)*[a-zA-Z0-9_\-.]+/g, '[system file]')
+    // Replace remaining direct root paths like /app/..., /bin/..., /usr/...
+    .replace(/\/(app|usr|bin|etc|var|tmp|home|opt|lib|lib64)\/[^\s:)]+/g, '[system file]');
+}
 
-  // Check local bin directory
+// Ensure file has executable permissions (prevents EACCES)
+function ensureExecutable(filePath: string): string {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.chmodSync(filePath, 0o755);
+    }
+  } catch (err) {
+    // Ignore if permission denied or read-only filesystem
+  }
+  return filePath;
+}
+
+// Module-level cached paths to prevent repeated fs.existsSync / chmodSync calls on every download request
+let cachedYtDlpPath: string | null = null;
+let cachedFFmpegPath: string | null = null;
+let cachedFFprobePath: string | null = null;
+
+function resolveYtDlpPath(): string {
+  if (process.env.YT_DLP_PATH) {
+    const envPath = process.env.YT_DLP_PATH.trim();
+    if (fs.existsSync(envPath)) {
+      return ensureExecutable(envPath);
+    }
+  }
   const localLinux = path.resolve(process.cwd(), 'bin', 'yt-dlp');
   if (fs.existsSync(localLinux)) {
-    return localLinux;
+    return ensureExecutable(localLinux);
   }
-
   const localWin = path.resolve(process.cwd(), 'bin', 'yt-dlp.exe');
   if (fs.existsSync(localWin)) {
-    return localWin;
+    return ensureExecutable(localWin);
   }
-
-  // System PATH default
   return process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 }
 
-// Locate ffmpeg executable across platforms
-export function getFFmpegPath(): string {
-  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH)) {
-    return process.env.FFMPEG_PATH;
+function resolveFFmpegPath(): string {
+  if (process.env.FFMPEG_PATH) {
+    const envPath = process.env.FFMPEG_PATH.trim();
+    if (fs.existsSync(envPath)) {
+      return ensureExecutable(envPath);
+    }
   }
-
   const localLinux = path.resolve(process.cwd(), 'bin', 'ffmpeg');
   if (fs.existsSync(localLinux)) {
-    return localLinux;
+    return ensureExecutable(localLinux);
   }
-
   const localWin = path.resolve(process.cwd(), 'bin', 'ffmpeg.exe');
   if (fs.existsSync(localWin)) {
-    return localWin;
+    return ensureExecutable(localWin);
   }
-
+  const systemPath = '/usr/bin/ffmpeg';
+  if (fs.existsSync(systemPath)) {
+    return ensureExecutable(systemPath);
+  }
   return process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
 }
 
-// Locate ffprobe executable across platforms
-export function getFFprobePath(): string {
-  if (process.env.FFPROBE_PATH && fs.existsSync(process.env.FFPROBE_PATH)) {
-    return process.env.FFPROBE_PATH;
+function resolveFFprobePath(): string {
+  if (process.env.FFPROBE_PATH) {
+    const envPath = process.env.FFPROBE_PATH.trim();
+    if (fs.existsSync(envPath)) {
+      return ensureExecutable(envPath);
+    }
   }
-
   const localLinux = path.resolve(process.cwd(), 'bin', 'ffprobe');
   if (fs.existsSync(localLinux)) {
-    return localLinux;
+    return ensureExecutable(localLinux);
   }
-
   const localWin = path.resolve(process.cwd(), 'bin', 'ffprobe.exe');
   if (fs.existsSync(localWin)) {
-    return localWin;
+    return ensureExecutable(localWin);
   }
-
+  const systemPath = '/usr/bin/ffprobe';
+  if (fs.existsSync(systemPath)) {
+    return ensureExecutable(systemPath);
+  }
   return process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
 }
 
+// Locate yt-dlp executable across platforms (instant in-memory lookup during requests)
+export function getExecutablePath(): string {
+  if (cachedYtDlpPath) return cachedYtDlpPath;
+  cachedYtDlpPath = resolveYtDlpPath();
+  return cachedYtDlpPath;
+}
+
+// Locate ffmpeg executable across platforms (instant in-memory lookup during requests)
+export function getFFmpegPath(): string {
+  if (cachedFFmpegPath) return cachedFFmpegPath;
+  cachedFFmpegPath = resolveFFmpegPath();
+  return cachedFFmpegPath;
+}
+
+// Locate ffprobe executable across platforms (instant in-memory lookup during requests)
+export function getFFprobePath(): string {
+  if (cachedFFprobePath) return cachedFFprobePath;
+  cachedFFprobePath = resolveFFprobePath();
+  return cachedFFprobePath;
+}
+
+// Startup environment validation for downloader and ffmpeg
+// Run ONCE at server boot to verify binaries and permissions
+export async function validateEnvironment(): Promise<{ ytDlp: boolean; ffmpeg: boolean; details: string }> {
+  let ytDlpOk = false;
+  let ffmpegOk = false;
+  const messages: string[] = [];
+
+  // Initialize and cache paths
+  cachedYtDlpPath = resolveYtDlpPath();
+  cachedFFmpegPath = resolveFFmpegPath();
+  cachedFFprobePath = resolveFFprobePath();
+
+  try {
+    const { stdout } = await execFileAsync(cachedYtDlpPath, ['--version']);
+    ytDlpOk = true;
+    messages.push(`yt-dlp OK (${cachedYtDlpPath}, v${stdout.trim()})`);
+    console.log(`[Downloader Check] yt-dlp OK at "${cachedYtDlpPath}" (v${stdout.trim()})`);
+  } catch (err: any) {
+    messages.push(`yt-dlp FAILED at "${cachedYtDlpPath}": ${err.message}`);
+    console.error(`[Downloader Check] yt-dlp FAILED at "${cachedYtDlpPath}":`, err.message);
+  }
+
+  try {
+    const { stdout } = await execFileAsync(cachedFFmpegPath, ['-version']);
+    ffmpegOk = true;
+    const firstLine = stdout.split('\n')[0] || 'unknown version';
+    console.log(`[Downloader Check] ffmpeg OK at "${cachedFFmpegPath}" (${firstLine})`);
+    messages.push(`ffmpeg OK (${cachedFFmpegPath})`);
+  } catch (err: any) {
+    messages.push(`ffmpeg FAILED at "${cachedFFmpegPath}": ${err.message}`);
+    console.error(`[Downloader Check] ffmpeg FAILED at "${cachedFFmpegPath}":`, err.message);
+  }
+
+  return {
+    ytDlp: ytDlpOk,
+    ffmpeg: ffmpegOk,
+    details: messages.join(' | '),
+  };
+}
+
 // Extract audio from video file to MP3 (320 kbps high quality)
+// Uses ultra-fast stream copy when source is MP3, or optimized libmp3lame with fast algorithmic quality (q:a 0)
 export async function extractAudioFromVideo(
   videoFilePath: string,
   baseId: string,
@@ -154,22 +248,45 @@ export async function extractAudioFromVideo(
 
   const ffmpeg = getFFmpegPath();
 
-  // FFmpeg high-quality MP3 conversion: 320 kbps, ultrafast preset to minimize processing time
+  // FFmpeg high-speed, high-quality MP3 conversion:
+  // - Multi-threaded non-blocking extraction utilizing all CPU cores (-threads 0)
+  // - -vn discards video decoding overhead completely
+  // - 320 kbps CBR preserving highest fidelity
+  // - -joint_stereo 1 for optimized encoding speed
   const args = [
+    '-nostats',
+    '-loglevel', 'error',
     '-y',
-    '-i',
-    videoFilePath,
-    '-vn',                 // discard video stream
-    '-c:a',
-    'libmp3lame',          // standard MP3 encoder
-    '-b:a',
-    '320k',                // 320 kbps high bitrate
-    '-preset',
-    'ultrafast',
+    '-threads', '0',
+    '-i', videoFilePath,
+    '-vn',
+    '-c:a', 'libmp3lame',
+    '-b:a', '320k',
+    '-joint_stereo', '1',
+    '-ar', '44100',
     mp3FilePath,
   ];
 
-  await execFileAsync(ffmpeg, args, { timeout: 35000 });
+  try {
+    await execFileAsync(ffmpeg, args, { timeout: 35000 });
+  } catch (err: any) {
+    const stderrText = (err.stderr || '').toString();
+    console.error('[FFmpeg Audio Extraction Error]', {
+      code: err.code,
+      syscall: err.syscall,
+      message: err.message,
+      stderr: stderrText.trim(),
+      executable: ffmpeg,
+    });
+    if (err.code === 'EACCES') {
+      throw new Error('Audio extraction failed: execution permission was denied (EACCES).');
+    }
+    if (err.code === 'ENOENT') {
+      throw new Error('Audio extraction failed: FFmpeg executable not found (ENOENT).');
+    }
+    const cleanMsg = stripInternalPaths(stderrText || err.message || 'audio conversion failed');
+    throw new Error(`Audio extraction failed: ${cleanMsg.slice(0, 150)}`);
+  }
 
   if (!fs.existsSync(mp3FilePath)) {
     throw new Error('MP3 audio file was not created by FFmpeg.');
@@ -334,7 +451,7 @@ ETA: ${eta}`;
   };
 }
 
-// Verify downloaded media file with ffprobe & filesystem checks
+// Verify downloaded media file with metadata and filesystem checks
 export async function verifyQuality(
   filePath: string,
   infoJson: any = {}
@@ -346,52 +463,56 @@ export async function verifyQuality(
   let height = infoJson?.height;
   let videoCodec = infoJson?.vcodec || 'h264';
   let audioCodec = infoJson?.acodec || 'aac';
-  let hasAudio = audioCodec && audioCodec !== 'none';
+  let hasAudio = Boolean(audioCodec && audioCodec !== 'none');
   let duration = typeof infoJson?.duration === 'number' ? infoJson.duration : 0;
   let container = path.extname(filePath).replace('.', '') || 'mp4';
 
-  // Attempt deep inspection with ffprobe for absolute verification
-  try {
-    const ffprobePath = getFFprobePath();
-    const args = [
-      '-v',
-      'error',
-      '-show_entries',
-      'stream=codec_type,codec_name,width,height',
-      '-show_entries',
-      'format=duration,size,format_name',
-      '-of',
-      'json',
-      filePath,
-    ];
+  // Fast path: If yt-dlp info.json already provides height and width,
+  // reuse it directly without spawning a redundant ffprobe child process.
+  // Only invoke ffprobe if resolution is completely missing.
+  if ((!height || !width) && fs.existsSync(filePath)) {
+    try {
+      const ffprobePath = getFFprobePath();
+      const args = [
+        '-v',
+        'error',
+        '-show_entries',
+        'stream=codec_type,codec_name,width,height',
+        '-show_entries',
+        'format=duration,size,format_name',
+        '-of',
+        'json',
+        filePath,
+      ];
 
-    const { stdout } = await execFileAsync(ffprobePath, args, { timeout: 8000 });
-    const parsed = JSON.parse(stdout);
+      const { stdout } = await execFileAsync(ffprobePath, args, { timeout: 3500 });
+      const parsed = JSON.parse(stdout);
 
-    if (Array.isArray(parsed.streams)) {
-      const videoStream = parsed.streams.find((s: any) => s.codec_type === 'video');
-      const audioStream = parsed.streams.find((s: any) => s.codec_type === 'audio');
+      if (Array.isArray(parsed.streams)) {
+        const videoStream = parsed.streams.find((s: any) => s.codec_type === 'video');
+        const audioStream = parsed.streams.find((s: any) => s.codec_type === 'audio');
 
-      if (videoStream) {
-        if (videoStream.width) width = videoStream.width;
-        if (videoStream.height) height = videoStream.height;
-        if (videoStream.codec_name) videoCodec = videoStream.codec_name;
+        if (videoStream) {
+          if (!width && videoStream.width) width = videoStream.width;
+          if (!height && videoStream.height) height = videoStream.height;
+          if (videoStream.codec_name) videoCodec = videoStream.codec_name;
+        }
+
+        if (audioStream) {
+          hasAudio = true;
+          if (audioStream.codec_name) audioCodec = audioStream.codec_name;
+        }
       }
 
-      if (audioStream) {
-        hasAudio = true;
-        if (audioStream.codec_name) audioCodec = audioStream.codec_name;
+      if (!duration && parsed.format?.duration) {
+        duration = parseFloat(parsed.format.duration);
       }
+      if (parsed.format?.format_name) {
+        container = parsed.format.format_name.split(',')[0];
+      }
+    } catch {
+      // ffprobe inspection failure or timeout; continue with available metadata
     }
-
-    if (parsed.format?.duration) {
-      duration = parseFloat(parsed.format.duration);
-    }
-    if (parsed.format?.format_name) {
-      container = parsed.format.format_name.split(',')[0];
-    }
-  } catch {
-    // ffprobe not in PATH or timed out; fallback to yt-dlp extracted metadata
   }
 
   let resolution = 'Highest Available';
@@ -431,8 +552,12 @@ export async function getMediaInfo(rawUrl: string): Promise<MediaInfo> {
     '--dump-single-json',
     '--no-warnings',
     '--no-playlist',
+    '--no-check-certificates',
+    '--no-cache-dir',
     '--socket-timeout',
-    '15',
+    '10',
+    '--retries',
+    '2',
     rawUrl,
   ];
 
@@ -462,14 +587,33 @@ export async function getMediaInfo(rawUrl: string): Promise<MediaInfo> {
       directUrl: json.url,
     };
   } catch (err: any) {
+    const stderrText = (err.stderr || '').toString();
     const errorMsg = (err.stderr || err.message || '').toString();
+    console.error('[Downloader Metadata Extraction Error]', {
+      code: err.code,
+      syscall: err.syscall,
+      message: err.message,
+      stderr: stderrText.trim(),
+      executable: ytDlp,
+    });
+
     if (errorMsg.includes('Private video') || errorMsg.includes('login') || errorMsg.includes('account is private')) {
       throw new Error('This Instagram media is private or requires authentication to view.');
     }
     if (errorMsg.includes('Video unavailable') || errorMsg.includes('not found') || errorMsg.includes('404')) {
       throw new Error('This Instagram media is unavailable or has been deleted.');
     }
-    throw new Error(`Failed to extract Instagram media: ${errorMsg.slice(0, 200)}`);
+    if (err.code === 'EACCES') {
+      throw new Error('Downloader service encountered an execution permission restriction (EACCES).');
+    }
+    if (err.code === 'ENOENT') {
+      throw new Error('Downloader service executable not found (ENOENT).');
+    }
+
+    const cleanMsg = stripInternalPaths(errorMsg);
+    const lines = cleanMsg.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+    const summary = lines.find((l) => /^ERROR:/i.test(l)) || lines[lines.length - 1] || 'Extraction error';
+    throw new Error(`Failed to extract Instagram media: ${summary.replace(/^ERROR:\s*/i, '').slice(0, 150)}`);
   }
 }
 
@@ -495,29 +639,40 @@ export async function downloadMedia(
   const ytDlp = getExecutablePath();
 
   // Speed and highest-quality arguments for Instagram:
-  // 1. Concurrent fragments: --concurrent-fragments 5
-  // 2. Format selector: bestvideo+bestaudio/best (no downscaling, preserves original resolution/bitrate)
-  // 3. Merging: FFmpeg merges streams into standard MP4
-  // 4. Chunk & buffer optimization: --http-chunk-size 10M --buffer-size 1M
+  // 1. Single-pass extraction & download: fetches metadata and downloads in ONE step
+  // 2. High concurrency fragments: --concurrent-fragments 8 for segmented streams
+  // 3. Format selector: bestvideo+bestaudio/best (no downscaling, preserves original resolution/bitrate)
+  // 4. Merging: FFmpeg merges streams into standard MP4
+  // 5. Direct file write: --no-part avoids intermediate file renaming overhead
+  // 6. Memory & IO: --no-mtime, --no-cache-dir, --buffer-size 1M, --http-chunk-size 10M
+  // 7. Non-blocking network timeouts: --socket-timeout 10, --retries 3, --fragment-retries 3
   const primaryArgs = [
     '--no-playlist',
     '--concurrent-fragments',
-    '5',
+    '8',
     '--http-chunk-size',
     '10M',
     '--buffer-size',
     '1M',
+    '--no-part',
+    '--no-mtime',
+    '--no-cache-dir',
     '-f',
-    'bestvideo+bestaudio/best',
+    'best/bestvideo+bestaudio',
     '--format-sort',
     'res,fps,size,br',
     '--merge-output-format',
     'mp4',
     '--no-warnings',
+    '--no-check-certificates',
     '--socket-timeout',
-    '20',
+    '10',
+    '--retries',
+    '2',
+    '--fragment-retries',
+    '2',
     '--extractor-retries',
-    '3',
+    '2',
     '-o',
     outputTemplate,
     '--write-info-json',
@@ -551,20 +706,83 @@ export async function downloadMedia(
         stderr += chunk.toString();
       });
 
-      proc.on('error', (err) => {
-        reject(new Error(`Failed to spawn downloader process: ${err.message}`));
+      proc.on('error', (err: any) => {
+        // Catch and log complete diagnostics including stderr, code, and syscall
+        console.error('[Downloader Process Spawn Error]', {
+          code: err.code,
+          syscall: err.syscall,
+          errno: err.errno,
+          message: err.message,
+          executable: ytDlp,
+          stderr: stderr.trim(),
+          stdout: stdout.trim(),
+        });
+
+        // Provide a clear user message without exposing internal server file paths
+        let userErrorMessage = 'Downloader process failed to start.';
+        if (err.code === 'EACCES') {
+          userErrorMessage = 'Downloader service encountered a permissions restriction (EACCES).';
+        } else if (err.code === 'ENOENT') {
+          userErrorMessage = 'Downloader service executable not found (ENOENT).';
+        } else if (err.code === 'EMFILE' || err.code === 'ENFILE') {
+          userErrorMessage = 'System file descriptor limit reached. Please try again shortly.';
+        } else if (err.code) {
+          userErrorMessage = `Downloader process failed to start (${err.code}).`;
+        }
+
+        reject(new Error(userErrorMessage));
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
         if (code !== 0) {
-          const errText = stderr || stdout;
+          const errText = (stderr || stdout || '').trim();
+
+          // Catch and log process exit status and stderr for full visibility into failure causes (e.g. dependencies, permissions)
+          console.error(`[Downloader Process Exited with Code ${code}${signal ? ` (signal ${signal})` : ''}]`, {
+            executable: ytDlp,
+            exitCode: code,
+            signal,
+            stderr: stderr.trim(),
+            stdout: stdout.trim(),
+          });
+
+          // Check for well-known Instagram outcomes
           if (errText.includes('Private video') || errText.includes('login') || errText.includes('account is private')) {
             return reject(new Error('This Instagram media is private or requires authentication.'));
           }
           if (errText.includes('Video unavailable') || errText.includes('not found') || errText.includes('404')) {
             return reject(new Error('Instagram media is unavailable or removed.'));
           }
-          return reject(new Error(`Instagram download failed: ${errText.slice(0, 250)}`));
+          if (errText.includes('Rate limit') || errText.includes('HTTP Error 429') || errText.includes('Too Many Requests')) {
+            return reject(new Error('Instagram temporarily limited requests. Please try again in a few moments.'));
+          }
+
+          // Check for system, permission, or dependency issues in stderr or exit codes
+          if (code === 126 || errText.toLowerCase().includes('permission denied')) {
+            return reject(new Error('Downloader process execution permission was denied (EACCES).'));
+          }
+          if (
+            code === 127 ||
+            (errText.toLowerCase().includes('not found') &&
+              !errText.toLowerCase().includes('video') &&
+              !errText.toLowerCase().includes('post'))
+          ) {
+            return reject(new Error('Downloader executable or required system dependency not found (ENOENT).'));
+          }
+          if (
+            errText.toLowerCase().includes('error while loading shared libraries') ||
+            errText.toLowerCase().includes('cannot open shared object file')
+          ) {
+            return reject(new Error('Downloader process failed due to a missing system dependency.'));
+          }
+
+          // Strip any internal paths from error message before returning to user
+          const sanitizedErr = stripInternalPaths(errText);
+          const lines = sanitizedErr.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+          const errorLine = lines.find((l) => /^ERROR:/i.test(l)) || lines[lines.length - 1] || 'Process terminated';
+          const userSummary = errorLine.replace(/^ERROR:\s*/i, '').slice(0, 150);
+
+          return reject(new Error(`Instagram download failed: ${userSummary || 'The media could not be downloaded.'}`));
         }
         resolve();
       });

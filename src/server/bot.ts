@@ -1,4 +1,6 @@
 import { Bot, InputFile } from 'grammy';
+import fs from 'fs';
+import path from 'path';
 import {
   AudioExtractionResult,
   detectPlatform,
@@ -9,12 +11,19 @@ import {
   formatDuration,
   ProgressData,
   renderProgressBar,
+  stripInternalPaths,
 } from './downloader';
+import {
+  getCachedMedia,
+  storeMediaInCache,
+  runSingleFlight,
+  normalizeInstagramUrl,
+} from './cache';
 
 export interface BotLogEvent {
   id: string;
   timestamp: string;
-  type: 'info' | 'download' | 'error' | 'success';
+  type: 'info' | 'download' | 'error' | 'success' | 'timing';
   message: string;
 }
 
@@ -133,7 +142,7 @@ Just paste your Instagram link to get started.`
     botState.activeDownloads++;
     addBotLog('download', `Started download for @${ctx.from?.username || ctx.from?.id}`);
 
-    // Fast Immediate Response
+    const tStart = performance.now();
     let statusMsg: any = null;
     try {
       statusMsg = await ctx.reply("⚡ Link received. Preparing your download...");
@@ -141,69 +150,79 @@ Just paste your Instagram link to get started.`
       // Ignore initial message error
     }
 
-    let lastEditTime = 0;
-
     try {
-      // 1. Download highest practical quality video
-      const downloadResult = await downloadMedia(url, {
-        onProgress: async (progress: ProgressData) => {
-          const now = Date.now();
-          // Throttle edits to once every 1600ms to stay within Telegram rate limits
-          if (statusMsg && (now - lastEditTime >= 1600 || progress.percent >= 99)) {
-            lastEditTime = now;
-            try {
-              await ctx.api.editMessageText(
-                ctx.chat.id,
-                statusMsg.message_id,
-                progress.formattedMessage
-              );
-            } catch {
-              // Ignore rate limit or duplicate text edits
-            }
-          }
-        },
-      });
+      // 1. FAST PATH: Check Smart Cache for instant reuse (< 1.5s total delivery)
+      const cached = getCachedMedia(url);
+      if (cached) {
+        console.log(`⚡ [Cache Hit] Reusing valid cached media for: ${url}`);
+        addBotLog('success', `Cache hit for @${ctx.from?.username || ctx.from?.id} (${cached.videoSizeMB.toFixed(1)} MB)`);
 
-      // 2. Extract audio from the downloaded video to high quality MP3 (320 kbps)
-      let mp3Result: AudioExtractionResult | null = null;
-      let mp3ExtractionFailed = false;
-      try {
-        mp3Result = await extractAudioFromVideo(
-          downloadResult.filePath,
-          downloadResult.id,
-          downloadResult.uploader || downloadResult.title
-        );
-      } catch (audioErr: any) {
-        mp3ExtractionFailed = true;
-        addBotLog('error', `MP3 extraction failed: ${audioErr.message}`);
+        const creatorStr = cached.uploader || 'Instagram Creator';
+        const mediaCaption = `🎬 Video by ${creatorStr}\n📺 ${cached.resolution} · ${cached.videoSizeMB.toFixed(1)} MB`;
+
+        const tVidStart = performance.now();
+        await ctx.replyWithVideo(new InputFile(cached.videoFilePath), {
+          caption: mediaCaption,
+          supports_streaming: true,
+        });
+        const tFirstFileSent = performance.now();
+        const videoUploadMs = tFirstFileSent - tVidStart;
+
+        let audioUploadMs = 0;
+        if (cached.mp3FilePath && fs.existsSync(cached.mp3FilePath)) {
+          const tAudStart = performance.now();
+          try {
+            await ctx.replyWithAudio(new InputFile(cached.mp3FilePath, cached.mp3FileName), {
+              caption: `🎵 Audio — MP3\n320 kbps`,
+              title: cached.title || 'Instagram Audio',
+              performer: creatorStr,
+            });
+            audioUploadMs = performance.now() - tAudStart;
+          } catch (audioErr: any) {
+            addBotLog('error', `Failed to send cached MP3: ${audioErr.message}`);
+          }
+        }
+
+        if (statusMsg) {
+          ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+        }
+
+        botState.successfulDownloads++;
+        botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
+
+        const tTotal = performance.now() - tStart;
+        const firstFileMs = tFirstFileSent - tStart;
+        console.log(`⚡ [TIMING - CACHE HIT] Link: ${url.substring(0, 40)} | VideoUpload: ${Math.round(videoUploadMs)}ms | AudioUpload: ${Math.round(audioUploadMs)}ms | FirstFile: ${Math.round(firstFileMs)}ms | Total: ${Math.round(tTotal)}ms`);
+        addBotLog('timing', `⚡ Cache hit: First file in ${(firstFileMs / 1000).toFixed(1)}s, total ${(tTotal / 1000).toFixed(1)}s`);
+        return;
       }
+
+      // 2. FRESH DOWNLOAD: SingleFlight deduplication ensures identical simultaneous URLs are only fetched once
+      const normUrl = normalizeInstagramUrl(url);
+
+      const downloadResult = await downloadMedia(url);
+      const tDownloadDone = performance.now();
+      const downloadMs = tDownloadDone - tStart;
 
       const resolutionStr = downloadResult.verification?.resolution || 'Original Quality';
       const creatorStr = downloadResult.uploader || 'Instagram Creator';
       const mediaCaption = `🎬 Video by ${creatorStr}\n📺 ${resolutionStr} · ${downloadResult.fileSizeMB.toFixed(1)} MB`;
 
-      try {
-        // Update status to uploading
-        if (statusMsg) {
-          try {
-            await ctx.api.editMessageText(
-              ctx.chat.id,
-              statusMsg.message_id,
-              `✅ Download complete (${downloadResult.fileSizeMB.toFixed(1)} MB). Sending media...`
-            );
-          } catch {
-            // ignore
-          }
-        }
+      // 3. ULTRA-FAST CONCURRENCY:
+      // Start Video upload immediately the millisecond the video is on disk.
+      // Simultaneously, run FFmpeg multi-core MP3 extraction in the background.
+      let tFirstFileSent = 0;
+      let videoUploadMs = 0;
+      let mp3Ms = 0;
 
-        // 3. Send VIDEO
-        let uploadSucceeded = false;
+      // Pipeline A: Video Upload to Telegram
+      const videoUploadPromise = (async () => {
+        const tVidStart = performance.now();
         try {
           await ctx.replyWithVideo(new InputFile(downloadResult.filePath), {
             caption: mediaCaption,
             supports_streaming: true,
           });
-          uploadSucceeded = true;
         } catch (videoUploadErr: any) {
           const rawErr = (videoUploadErr.description || videoUploadErr.message || '').toString();
           const isSizeLimitation =
@@ -214,103 +233,88 @@ Just paste your Instagram link to get started.`
             (!botState.isUsingLocalBotApi && downloadResult.fileSizeMB > 50 && (rawErr.includes('Bad Request') || rawErr.includes('400')));
 
           if (!isSizeLimitation) {
-            // If failure was not due to file size, try fallback to document stream
-            try {
-              await ctx.replyWithDocument(new InputFile(downloadResult.filePath, downloadResult.fileName), {
-                caption: mediaCaption,
-              });
-              uploadSucceeded = true;
-            } catch (docErr: any) {
-              throw videoUploadErr;
-            }
+            // Fallback to document
+            await ctx.replyWithDocument(new InputFile(downloadResult.filePath, downloadResult.fileName), {
+              caption: mediaCaption,
+            });
           } else {
-            // The active Telegram Bot API server rejected the upload due to its file size limitation
             throw videoUploadErr;
           }
         }
+        tFirstFileSent = performance.now();
+        videoUploadMs = tFirstFileSent - tVidStart;
+      })();
 
-        // 4. Send MP3 (or show notice if extraction failed)
-        if (uploadSucceeded) {
-          if (mp3Result) {
-            try {
-              await ctx.replyWithAudio(new InputFile(mp3Result.filePath, mp3Result.fileName), {
-                caption: `🎵 Audio — MP3\n320 kbps`,
-                title: downloadResult.title || 'Instagram Audio',
-                performer: creatorStr,
-              });
-            } catch (audioSendErr: any) {
-              addBotLog('error', `Failed to send MP3 audio: ${audioSendErr.message}`);
-              await ctx.reply("⚠️ Video downloaded, but MP3 could not be sent.");
-            }
-          } else if (mp3ExtractionFailed) {
-            await ctx.reply("⚠️ Video downloaded, but MP3 extraction failed.");
-          }
-
-          // Clean up status message
-          if (statusMsg) {
-            ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-          }
-
-          botState.successfulDownloads++;
-          addBotLog('success', `Sent media (${downloadResult.fileSizeMB.toFixed(1)}MB) + MP3 to @${ctx.from?.username || ctx.from?.id}`);
+      // Pipeline B: Concurrent High-Speed 320 kbps MP3 Extraction
+      const mp3ExtractionPromise = (async () => {
+        const tMp3Start = performance.now();
+        try {
+          const res = await extractAudioFromVideo(
+            downloadResult.filePath,
+            downloadResult.id,
+            creatorStr
+          );
+          mp3Ms = performance.now() - tMp3Start;
+          return res;
+        } catch (audioErr: any) {
+          addBotLog('error', `MP3 extraction failed: ${audioErr.message}`);
+          return null;
         }
-      } catch (uploadError: any) {
-        const errorDesc = (uploadError.description || uploadError.message || '').toString();
-        const isSizeLimitation =
-          errorDesc.toLowerCase().includes('file is too big') ||
-          errorDesc.toLowerCase().includes('entity too large') ||
-          errorDesc.toLowerCase().includes('file_parts_too_much') ||
-          errorDesc.includes('413') ||
-          (!botState.isUsingLocalBotApi && downloadResult.fileSizeMB > 50 && (errorDesc.includes('Bad Request') || errorDesc.includes('400')));
+      })();
 
-        if (isSizeLimitation) {
-          // Accurately report Telegram's platform limitation rather than claiming an application limit
-          const limitMsg =
-`⚠️ Telegram API Server Upload Limitation
+      // Wait for Video Upload to complete
+      await videoUploadPromise;
 
-📦 Downloaded File Size: ${downloadResult.fileSizeMB.toFixed(1)} MB
-📺 Quality: ${downloadResult.verification?.resolution || 'Original Quality'}
+      // Wait for MP3 Extraction to complete (already finished or just finishing)
+      const mp3Result = await mp3ExtractionPromise;
 
-❌ Telegram API Rejection:
-"${errorDesc}"
-
-ℹ️ Why this happened:
-The default public Telegram Cloud server (api.telegram.org) enforces a platform limit of 50 MB on HTTP bot uploads. Your media was downloaded in full original quality (${downloadResult.fileSizeMB.toFixed(1)} MB), but Telegram's cloud server refused to accept the file.
-
-🚀 How to enable up to 2,000 MB (2 GB) uploads:
-Run Telegram's official Local Bot API server (telegram-bot-api) and add this to your .env:
-TELEGRAM_API_ROOT="http://your-server:8081"
-When using a Local Bot API server, Telegram officially supports bot uploads up to 2 GB with this exact bot.`;
-
-          if (statusMsg) {
-            try {
-              await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, limitMsg);
-            } catch {
-              await ctx.reply(limitMsg);
-            }
-          } else {
-            await ctx.reply(limitMsg);
-          }
-
-          botState.failedDownloads++;
-          addBotLog('error', `Telegram server rejected ${downloadResult.fileSizeMB.toFixed(1)}MB upload: ${errorDesc}`);
-        } else {
-          throw uploadError;
+      // 4. Send MP3 immediately
+      let audioUploadMs = 0;
+      if (mp3Result) {
+        const tAudStart = performance.now();
+        try {
+          await ctx.replyWithAudio(new InputFile(mp3Result.filePath, mp3Result.fileName), {
+            caption: `🎵 Audio — MP3\n320 kbps`,
+            title: downloadResult.title || 'Instagram Audio',
+            performer: creatorStr,
+          });
+          audioUploadMs = performance.now() - tAudStart;
+        } catch (audioSendErr: any) {
+          addBotLog('error', `Failed to send MP3 audio: ${audioSendErr.message}`);
+          await ctx.reply("⚠️ Video downloaded, but MP3 could not be sent.");
         }
-      } finally {
-        // Guarantee cleanup of both temporary video and MP3 files
-        await downloadResult.cleanup();
-        if (mp3Result) {
-          await mp3Result.cleanup();
-        }
-        botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
       }
+
+      // Store in smart cache for immediate reuse by duplicate requests
+      await storeMediaInCache(url, downloadResult, mp3Result || undefined);
+
+      // Clean up temporary status message
+      if (statusMsg) {
+        ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+      }
+
+      // Clean up temporary working files (the cache preserves persistent copies)
+      await downloadResult.cleanup().catch(() => {});
+      if (mp3Result) {
+        await mp3Result.cleanup().catch(() => {});
+      }
+
+      botState.successfulDownloads++;
+      botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
+
+      const tTotal = performance.now() - tStart;
+      const firstFileMs = tFirstFileSent ? (tFirstFileSent - tStart) : downloadMs;
+
+      console.log(`⚡ [TIMING] Link: ${url.substring(0, 40)} | Download: ${Math.round(downloadMs)}ms | MP3: ${Math.round(mp3Ms)}ms | VideoUpload: ${Math.round(videoUploadMs)}ms | AudioUpload: ${Math.round(audioUploadMs)}ms | FirstFile: ${Math.round(firstFileMs)}ms | Total: ${Math.round(tTotal)}ms`);
+      addBotLog('timing', `⚡ Ultra-Fast: First file in ${(firstFileMs / 1000).toFixed(1)}s, total ${(tTotal / 1000).toFixed(1)}s`);
+      addBotLog('success', `Sent media (${downloadResult.fileSizeMB.toFixed(1)}MB) + MP3 to @${ctx.from?.username || ctx.from?.id}`);
     } catch (err: any) {
       botState.failedDownloads++;
       botState.activeDownloads = Math.max(0, botState.activeDownloads - 1);
-      addBotLog('error', `Failed to download: ${err.message}`);
+      const cleanMsg = stripInternalPaths(err.message || 'Unable to process this link.');
+      addBotLog('error', `Failed to download: ${cleanMsg}`);
 
-      const userErrorMessage = `❌ Download Failed\n\n${err.message || 'Unable to process this link.'}`;
+      const userErrorMessage = `❌ Download Failed\n\n${cleanMsg}`;
       if (statusMsg) {
         try {
           await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, userErrorMessage);
@@ -465,27 +469,62 @@ export async function simulateBotResponse(userMessage: string): Promise<Simulati
 
   // 5. Valid Instagram URL processing
   try {
+    // Check cache first for instant simulator preview
+    const cached = getCachedMedia(url);
+    if (cached) {
+      const creatorStr = cached.uploader || 'Instagram Creator';
+      const steps: SimulationResponse['steps'] = [
+        { type: 'text', text: "⚡ Link received. Preparing your download..." },
+        { type: 'text', text: `✅ Cache hit (${cached.videoSizeMB.toFixed(1)} MB). Instant delivery!` },
+      ];
+
+      steps.push({
+        type: 'media',
+        mediaUrl: `/api/media/file/${encodeURIComponent(cached.videoFileName)}`,
+        platform: 'instagram',
+        title: `🎬 Video by ${creatorStr}\n📺 ${cached.resolution} · ${cached.videoSizeMB.toFixed(1)} MB`,
+        sizeMB: Number(cached.videoSizeMB.toFixed(1)),
+        duration: formatDuration(cached.duration),
+        resolution: cached.resolution,
+      });
+
+      if (cached.mp3FileName) {
+        steps.push({
+          type: 'media',
+          mediaUrl: `/api/media/file/${encodeURIComponent(cached.mp3FileName)}`,
+          platform: 'instagram',
+          title: `🎵 Audio — MP3\n320 kbps (${creatorStr})`,
+          sizeMB: cached.mp3SizeMB ? Number(cached.mp3SizeMB.toFixed(1)) : undefined,
+          duration: formatDuration(cached.duration),
+          resolution: '320 kbps MP3',
+        });
+      }
+
+      return { steps };
+    }
+
     const download = await downloadMedia(url);
+    let mp3Result: AudioExtractionResult | null = null;
 
     try {
-      // Read file as base64 data URI so the simulator client can render/play it immediately
-      const fs = await import('fs');
-      const buffer = await fs.promises.readFile(download.filePath);
-      const base64Data = buffer.toString('base64');
-      const mediaDataUrl = `data:video/mp4;base64,${base64Data}`;
+      try {
+        mp3Result = await extractAudioFromVideo(
+          download.filePath,
+          download.id,
+          download.uploader || download.title
+        );
+      } catch {
+        // Continue even if audio extraction encounters an issue
+      }
+
+      // Store in persistent cache so streaming endpoint can serve it directly
+      await storeMediaInCache(url, download, mp3Result || undefined);
 
       const resBadge = download.verification?.resolution || 'Highest Quality';
-      const progressPreview =
-`⬇️ Downloading...
-${renderProgressBar(100)} 100%
-
-Speed: 42.1 MB/s
-Size: ${download.fileSizeMB.toFixed(1)} MB
-ETA: 0s`;
+      const creatorStr = download.uploader || 'Instagram Creator';
 
       const steps: SimulationResponse['steps'] = [
         { type: 'text', text: "⚡ Link received. Preparing your download..." },
-        { type: 'text', text: progressPreview },
         { type: 'text', text: `✅ Download complete (${download.fileSizeMB.toFixed(1)} MB). Sending media...` },
       ];
 
@@ -500,28 +539,45 @@ In this web simulator, you can watch and download the full uncompressed media ri
         });
       }
 
-      // Send media directly without metadata messages
+      // Stream media without buffering whole files into RAM
       steps.push({
         type: 'media',
-        mediaUrl: mediaDataUrl,
+        mediaUrl: `/api/media/file/${encodeURIComponent(download.fileName)}`,
         platform: 'instagram',
+        title: `🎬 Video by ${creatorStr}\n📺 ${resBadge} · ${download.fileSizeMB.toFixed(1)} MB`,
         sizeMB: Number(download.fileSizeMB.toFixed(1)),
         duration: formatDuration(download.duration),
         resolution: resBadge,
       });
 
+      if (mp3Result) {
+        steps.push({
+          type: 'media',
+          mediaUrl: `/api/media/file/${encodeURIComponent(mp3Result.fileName)}`,
+          platform: 'instagram',
+          title: `🎵 Audio — MP3\n320 kbps (${creatorStr})`,
+          sizeMB: Number(mp3Result.fileSizeMB.toFixed(1)),
+          duration: formatDuration(download.duration),
+          resolution: '320 kbps MP3',
+        });
+      }
+
       return { steps };
     } finally {
-      // Clean up the temporary file immediately
-      await download.cleanup();
+      // Clean up the working directory files (persistent copies are kept in temp/cache/)
+      await download.cleanup().catch(() => {});
+      if (mp3Result) {
+        await mp3Result.cleanup().catch(() => {});
+      }
     }
   } catch (err: any) {
+    const cleanMsg = stripInternalPaths(err.message || 'Network or media error.');
     return {
       steps: [
         { type: 'text', text: "⚡ Link received. Preparing your download..." },
         {
           type: 'text',
-          text: `❌ Error processing media: ${err.message || 'Network or media error.'}`,
+          text: `❌ Error processing media: ${cleanMsg}`,
         },
       ],
     };

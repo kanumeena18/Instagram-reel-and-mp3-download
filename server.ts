@@ -15,7 +15,10 @@ import {
   downloadMedia,
   extractUrl,
   getExecutablePath,
+  getFFmpegPath,
+  getFFprobePath,
   getMediaInfo,
+  validateEnvironment,
 } from './src/server/downloader';
 
 dotenv.config();
@@ -49,6 +52,8 @@ app.get('/api/status', (req: Request, res: Response) => {
     },
     system: {
       ytDlpPath: getExecutablePath(),
+      ffmpegPath: getFFmpegPath(),
+      ffprobePath: getFFprobePath(),
       hasEnvToken,
       platform: process.platform,
       nodeVersion: process.version,
@@ -130,6 +135,50 @@ app.post('/api/media/info', async (req: Request, res: Response) => {
   }
 });
 
+// Direct Media Stream for Simulator and Browser playback (Zero RAM buffering)
+app.get('/api/media/file/:filename', (req: Request, res: Response) => {
+  const filename = path.basename(req.params.filename);
+  const tempDir = path.resolve(process.cwd(), 'temp');
+  const cacheDir = path.resolve(tempDir, 'cache');
+
+  let targetPath = path.join(tempDir, filename);
+  if (!fs.existsSync(targetPath)) {
+    targetPath = path.join(cacheDir, filename);
+  }
+
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).send('Media file not found');
+  }
+
+  const stat = fs.statSync(targetPath);
+  const isMp3 = filename.endsWith('.mp3');
+
+  // Support range requests for fast seeking
+  const range = req.headers.range;
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+    const chunksize = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': isMp3 ? 'audio/mpeg' : 'video/mp4',
+    });
+
+    const file = fs.createReadStream(targetPath, { start, end });
+    file.pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': stat.size,
+      'Content-Type': isMp3 ? 'audio/mpeg' : 'video/mp4',
+    });
+    fs.createReadStream(targetPath).pipe(res);
+  }
+});
+
 // Direct Download Stream for Link Tester
 app.get('/api/media/download', async (req: Request, res: Response) => {
   const rawUrl = req.query.url as string;
@@ -162,6 +211,15 @@ app.get('/api/media/download', async (req: Request, res: Response) => {
 
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+
+  console.log('🔍 Running startup environment check for yt-dlp and ffmpeg...');
+  const envCheck = await validateEnvironment();
+  if (!envCheck.ytDlp) {
+    console.warn('[Warning] yt-dlp validation check failed. Downloading may fail if yt-dlp is not accessible.');
+  }
+  if (!envCheck.ffmpeg) {
+    console.warn('[Warning] ffmpeg validation check failed. MP3 audio extraction may fail.');
+  }
 
   if (!isProduction) {
     // Development mode: Vite middleware

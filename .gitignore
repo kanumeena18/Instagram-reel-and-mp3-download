@@ -1,8 +1,14 @@
 node_modules/
 build/
 dist/
+temp/
+data/
+*.sqlite*
 coverage/
 .DS_Store
 *.log
+*.key
+*.pem
+*.cert
 .env*
 !.env.example

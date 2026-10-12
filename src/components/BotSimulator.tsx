@@ -87,7 +87,7 @@ export const BotSimulator: React.FC = () => {
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
         if (i > 0) {
-          await new Promise((r) => setTimeout(r, 650));
+          await new Promise((r) => setTimeout(r, 120));
         }
 
         const botMsg: ChatMessage = {
@@ -134,26 +134,26 @@ export const BotSimulator: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[740px] max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+    <div className="flex flex-col h-[740px] max-w-4xl mx-auto clay-card overflow-hidden">
       {/* Telegram Chat Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-slate-900/90 border-b border-slate-800/80 backdrop-blur">
+      <div className="flex items-center justify-between px-6 py-4 bg-white/95 border-b border-slate-200/80 backdrop-blur">
         <div className="flex items-center gap-3">
           <div className="relative">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-sky-400 to-sky-600 flex items-center justify-center text-white font-bold text-sm shadow-[0_4px_12px_-2px_rgba(2,132,199,0.35),inset_0_1.5px_2px_0_rgba(255,255,255,0.4)]">
               ⚡
             </div>
-            <div className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-slate-900 rounded-full"></div>
+            <div className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></div>
           </div>
           <div>
-            <h3 className="font-semibold text-slate-100 text-sm">MediaFetch ⚡</h3>
-            <p className="text-xs text-sky-400 font-mono">@MediaFetchBot · bot</p>
+            <h3 className="font-semibold text-slate-900 text-sm">MediaFetch ⚡</h3>
+            <p className="text-xs text-sky-600 font-mono">@MediaFetchBot · bot</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={resetChat}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 clay-btn-secondary"
             title="Reset Conversation"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -163,14 +163,14 @@ export const BotSimulator: React.FC = () => {
       </div>
 
       {/* Quick Prompts Bar */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-slate-950/40 border-b border-slate-800/60 overflow-x-auto text-xs">
-        <span className="text-slate-500 shrink-0 font-medium">Quick Test:</span>
+      <div className="flex items-center gap-2 px-6 py-2.5 bg-slate-50/80 border-b border-slate-200/60 overflow-x-auto text-xs">
+        <span className="text-slate-400 shrink-0 font-medium text-[11px] uppercase tracking-wider">Quick Test:</span>
         {SAMPLE_PROMPTS.map((prompt) => (
           <button
             key={prompt.label}
             onClick={() => handleSend(prompt.value)}
             disabled={isProcessing}
-            className="px-2.5 py-1 text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 rounded-md whitespace-nowrap transition-colors disabled:opacity-50"
+            className="px-3 py-1 text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/80 whitespace-nowrap shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all disabled:opacity-50"
           >
             {prompt.label}
           </button>
@@ -178,39 +178,57 @@ export const BotSimulator: React.FC = () => {
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-950/20">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-slate-50/50 to-white/50">
         {messages.map((msg) => (
           <div
             key={msg.id}
             className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 shadow-md ${
+              className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 text-sm leading-relaxed transition-all ${
                 msg.sender === 'user'
-                  ? 'bg-sky-600 text-white rounded-tr-none'
-                  : 'bg-slate-800 text-slate-200 border border-slate-700/60 rounded-tl-none'
+                  ? 'clay-btn-primary rounded-2xl rounded-tr-sm text-white font-normal'
+                  : 'bg-white text-slate-800 rounded-2xl rounded-tl-sm border border-slate-200/90 shadow-[0_8px_20px_-4px_rgba(15,23,42,0.05),inset_0_1px_2px_0_rgba(255,255,255,1)]'
               }`}
             >
               {msg.type === 'media' && msg.mediaUrl ? (
-                <div className="space-y-2">
-                  <div className="rounded-xl overflow-hidden bg-black/60 border border-slate-700/50">
-                    <video
-                      src={msg.mediaUrl}
-                      controls
-                      className="w-full max-h-72 object-contain"
-                      poster=""
-                    />
-                  </div>
+                <div className="space-y-2.5">
+                  {msg.mediaUrl.startsWith('data:audio') || msg.mediaUrl.endsWith('.mp3') || msg.title?.includes('Audio') ? (
+                    <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2 shadow-[inset_0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between text-xs font-medium text-slate-700">
+                        <span className="flex items-center gap-1.5 text-sky-600 font-semibold">
+                          <span>🎵</span> <span>Audio · 320 kbps MP3</span>
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono">{msg.sizeMB ? `${msg.sizeMB} MB` : ''}</span>
+                      </div>
+                      <audio src={msg.mediaUrl} controls className="w-full h-8" />
+                    </div>
+                  ) : (
+                    <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-200/60 shadow-inner">
+                      <video
+                        src={msg.mediaUrl}
+                        controls
+                        className="w-full max-h-72 object-contain"
+                        poster=""
+                      />
+                    </div>
+                  )}
+
+                  {msg.title && (
+                    <div className="text-xs whitespace-pre-wrap text-slate-700 font-medium bg-slate-50/70 p-2.5 rounded-xl border border-slate-200/60 leading-relaxed">
+                      {msg.title}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                <div className="whitespace-pre-wrap">
                   {msg.text}
                 </div>
               )}
 
               <div
                 className={`text-[10px] mt-1 font-mono text-right ${
-                  msg.sender === 'user' ? 'text-sky-200' : 'text-slate-400'
+                  msg.sender === 'user' ? 'text-sky-100' : 'text-slate-400'
                 }`}
               >
                 {msg.timestamp}
@@ -221,8 +239,8 @@ export const BotSimulator: React.FC = () => {
 
         {isProcessing && (
           <div className="flex justify-start">
-            <div className="bg-slate-800 text-slate-300 border border-slate-700/60 rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2 text-sm shadow-md">
-              <Loader2 className="w-4 h-4 text-sky-400 animate-spin" />
+            <div className="bg-white text-slate-600 border border-slate-200/90 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2 text-sm shadow-[0_8px_20px_-4px_rgba(15,23,42,0.05)]">
+              <Loader2 className="w-4 h-4 text-sky-500 animate-spin" />
               <span>Processing media stream...</span>
             </div>
           </div>
@@ -237,7 +255,7 @@ export const BotSimulator: React.FC = () => {
           e.preventDefault();
           handleSend();
         }}
-        className="p-3 sm:p-4 bg-slate-900 border-t border-slate-800 flex items-center gap-2"
+        className="p-4 bg-white border-t border-slate-200/80 flex items-center gap-3"
       >
         <input
           type="text"
@@ -245,12 +263,12 @@ export const BotSimulator: React.FC = () => {
           onChange={(e) => setInputText(e.target.value)}
           placeholder="Paste Instagram URL or /start..."
           disabled={isProcessing}
-          className="flex-1 bg-slate-950/80 border border-slate-800 focus:border-sky-500 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors"
+          className="flex-1 clay-input px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none"
         />
         <button
           type="submit"
           disabled={!inputText.trim() || isProcessing}
-          className="px-4 py-2.5 bg-sky-500 hover:bg-sky-400 text-white font-medium rounded-xl text-sm flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-sky-500/20"
+          className="clay-btn-primary px-5 py-2.5 text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span>Send</span>
           <Send className="w-4 h-4" />
@@ -259,3 +277,4 @@ export const BotSimulator: React.FC = () => {
     </div>
   );
 };
+

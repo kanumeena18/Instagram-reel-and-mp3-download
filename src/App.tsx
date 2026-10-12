@@ -3,7 +3,7 @@ import { BotSimulator } from './components/BotSimulator';
 import { LinkTester } from './components/LinkTester';
 import { BotManager } from './components/BotManager';
 import { WindowsGuide } from './components/WindowsGuide';
-import { Bot, Link, Settings, BookOpen, Radio, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Bot, Link as LinkIcon, Settings, BookOpen } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'simulator' | 'tester' | 'manager' | 'guide'>('simulator');
@@ -29,27 +29,32 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Top Bar Contract (3 Zones) */}
-      <header className="sticky top-0 z-50 bg-slate-950/80 border-b border-slate-800/80 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between">
+    <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans">
+      {/* Top Bar Contract (3 Zones) with Claymorphic Elegance */}
+      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3.5 flex items-center justify-between shadow-[0_2px_12px_-2px_rgba(15,23,42,0.03)]">
         {/* Zone 1: Single Brand Wordmark */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-b from-sky-400 to-sky-600 text-white flex items-center justify-center font-bold text-sm shadow-[0_4px_10px_-2px_rgba(2,132,199,0.35),inset_0_1.5px_2px_0_rgba(255,255,255,0.4)]">
             ⚡
           </div>
-          <span className="text-base font-bold tracking-tight text-white">
-            MediaFetch
-          </span>
+          <div>
+            <span className="text-base font-bold tracking-tight text-slate-900 block leading-tight">
+              MediaFetch
+            </span>
+            <span className="text-[11px] font-medium text-slate-400 block leading-none">
+              Instagram Downloader
+            </span>
+          </div>
         </div>
 
-        {/* Zone 2: Navigation Links / Tabs */}
-        <nav className="flex items-center gap-1 sm:gap-2">
+        {/* Zone 2: Navigation Links / Segmented Tabs */}
+        <nav className="flex items-center gap-1 sm:gap-1.5 p-1 bg-slate-100/90 rounded-2xl border border-slate-200/70 shadow-[inset_0_1.5px_3px_0_rgba(15,23,42,0.04)]">
           <button
             onClick={() => setActiveTab('simulator')}
-            className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl transition-all whitespace-nowrap flex items-center gap-1.5 ${
               activeTab === 'simulator'
-                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                ? 'clay-tab-active font-semibold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
             <Bot className="w-4 h-4" />
@@ -59,23 +64,23 @@ export default function App() {
 
           <button
             onClick={() => setActiveTab('tester')}
-            className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl transition-all whitespace-nowrap flex items-center gap-1.5 ${
               activeTab === 'tester'
-                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                ? 'clay-tab-active font-semibold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
-            <Link className="w-4 h-4" />
+            <LinkIcon className="w-4 h-4" />
             <span className="hidden sm:inline">Link Tester</span>
             <span className="sm:hidden">Tester</span>
           </button>
 
           <button
             onClick={() => setActiveTab('manager')}
-            className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl transition-all whitespace-nowrap flex items-center gap-1.5 ${
               activeTab === 'manager'
-                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                ? 'clay-tab-active font-semibold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
             <Settings className="w-4 h-4" />
@@ -85,10 +90,10 @@ export default function App() {
 
           <button
             onClick={() => setActiveTab('guide')}
-            className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 text-xs sm:text-sm font-medium rounded-xl transition-all whitespace-nowrap flex items-center gap-1.5 ${
               activeTab === 'guide'
-                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                ? 'clay-tab-active font-semibold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
             <BookOpen className="w-4 h-4" />
@@ -97,37 +102,52 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Zone 3: Primary Action / Status */}
+        {/* Zone 3: Primary Status Indicator */}
         <div className="flex items-center gap-3">
           <div
-            className={`px-2.5 py-1 rounded-full text-xs font-mono font-medium flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-mono font-medium flex items-center gap-2 border shadow-[0_2px_4px_rgba(15,23,42,0.02)] ${
               botRunning
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-slate-900 text-slate-400 border border-slate-800'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
             }`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${botRunning ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-            <span className="hidden md:inline">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                botRunning ? 'bg-emerald-500 ring-2 ring-emerald-200 animate-pulse' : 'bg-slate-400'
+              }`}
+            />
+            <span className="hidden md:inline font-semibold">
               {botRunning ? (botUsername ? `@${botUsername}` : 'Polling Active') : 'Bot Idle'}
             </span>
-            <span className="md:hidden">{botRunning ? 'Live' : 'Idle'}</span>
+            <span className="md:hidden font-semibold">{botRunning ? 'Live' : 'Idle'}</span>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 p-4 sm:p-8 max-w-6xl w-full mx-auto">
+      {/* Main Content Viewport */}
+      <main className="flex-1 p-4 sm:p-8 max-w-5xl w-full mx-auto space-y-6">
         {activeTab === 'simulator' && <BotSimulator />}
         {activeTab === 'tester' && <LinkTester />}
         {activeTab === 'manager' && <BotManager />}
         {activeTab === 'guide' && <WindowsGuide />}
       </main>
 
-      {/* Minimal Clean Footer */}
-      <footer className="border-t border-slate-900 px-6 py-4 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between max-w-6xl w-full mx-auto">
-        <p>Telegram Media Downloader · Instagram Downloader</p>
-        <p className="font-mono text-slate-600">Highest Practical Quality · Fast Processing · Auto Cleanup</p>
+      {/* Minimal Clean Claymorphic Footer */}
+      <footer className="border-t border-slate-200/80 bg-white/60 backdrop-blur px-6 py-5 text-xs text-slate-500">
+        <div className="max-w-5xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-slate-600 font-medium">
+            <span>MediaFetch</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span>Instagram Media Downloader</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span className="text-slate-400">High-Fidelity Audio & Video</span>
+          </div>
+          <div className="text-slate-400 text-[11px] font-mono">
+            Direct MP4 + 320 kbps MP3 · Auto Temp Cleanup
+          </div>
+        </div>
       </footer>
     </div>
   );
 }
+
